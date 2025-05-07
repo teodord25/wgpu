@@ -48,12 +48,21 @@
             cargo-edit
             cargo-watch
             rust-analyzer
+            wayland            # provides libwayland-client.so
+            wayland-protocols  # often needed at build time
           ];
 
           env = {
             # Required by rust-analyzer
             RUST_SRC_PATH = "${pkgs.rustToolchain}/lib/rustlib/src/rust/library";
           };
+
+          shellHook = ''
+            alias ga='git add'
+            alias gs='git status'
+            alias ga='git commit'
+            alias gp='git push'
+          '';
         };
       });
     };
