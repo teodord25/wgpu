@@ -1,5 +1,6 @@
-
+use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
+use wgpu::util::DeviceExt;
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalSize, Size};
 use winit::event::StartCause;
@@ -7,11 +8,6 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-// first, add these at the top of your file:
-use wgpu::util::DeviceExt;
-use bytemuck::{Pod, Zeroable};
-
-// A simple 2-vertex struct for a full-screen quad
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct Vertex {
@@ -27,13 +23,20 @@ impl Vertex {
     };
 }
 
-// Creates a GPU buffer containing four XY positions
 fn create_quad_vertex_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     let verts = [
-        Vertex { position: [-1.0, -1.0] },
-        Vertex { position: [ 1.0, -1.0] },
-        Vertex { position: [-1.0,  1.0] },
-        Vertex { position: [ 1.0,  1.0] },
+        Vertex {
+            position: [-0.5, -0.5],
+        },
+        Vertex {
+            position: [0.5, -0.5],
+        },
+        Vertex {
+            position: [-0.5, 0.5],
+        },
+        Vertex {
+            position: [0.5, 0.5],
+        },
     ];
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Quad Vertex Buffer"),
@@ -47,9 +50,7 @@ fn create_pipeline(
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
 ) -> wgpu::RenderPipeline {
-
-    let shader = device.create_shader_module(
-    wgpu::ShaderModuleDescriptor {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Basic Shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
     });
@@ -90,6 +91,68 @@ fn create_pipeline(
     })
 }
 
+fn create_gpu_state(
+    window: &Arc<Window>,
+) -> (
+    Option<wgpu::SurfaceConfiguration>,
+    Option<wgpu::Surface<'static>>,
+    Option<wgpu::RenderPipeline>,
+    Option<wgpu::Buffer>,
+    Option<wgpu::Queue>,
+    Option<wgpu::Device>,
+) {
+    // create wgpu instance and surface
+    let instance = wgpu::Instance::default();
+
+    let raw = instance.create_surface(window).unwrap();
+    let surface = unsafe { std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(raw) };
+
+    // choose an adapter
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: Some(&surface),
+        force_fallback_adapter: false,
+    }))
+    .expect("Failed to find an appropriate adapter");
+
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: None,
+        required_features: wgpu::Features::empty(),
+        required_limits: if cfg!(target_arch = "wasm32") {
+            wgpu::Limits::downlevel_webgl2_defaults()
+        } else {
+            wgpu::Limits::default()
+        },
+        memory_hints: wgpu::MemoryHints::default(),
+        trace: wgpu::Trace::Off,
+    }))
+    .unwrap();
+
+    let surface_caps = surface.get_capabilities(&adapter);
+    let surface_format = surface_caps.formats[0]; // choose a supported format?
+
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: surface_format,
+        width: window.inner_size().width,
+        height: window.inner_size().height,
+        present_mode: wgpu::PresentMode::Fifo,
+        desired_maximum_frame_latency: 2,
+        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+        view_formats: vec![],
+    };
+    surface.configure(&device, &config);
+
+    return (
+        Some(config.clone()),
+        Some(surface),
+        Some(create_pipeline(&device, &config)),
+        Some(create_quad_vertex_buffer(&device)),
+        Some(queue),
+        Some(device),
+    );
+}
+
 #[derive(Default)]
 struct App {
     window: Option<Arc<Window>>,
@@ -119,97 +182,74 @@ impl ApplicationHandler for App {
                 .create_window(
                     Window::default_attributes()
                         .with_inner_size(Size::Physical(PhysicalSize::new(800, 400)))
-                        .with_visible(true)
-                    )
+                        .with_visible(true),
+                )
                 .unwrap(),
         );
 
         self.window = Some(window);
 
-        // Get the window
         let window = self.window.as_ref().unwrap();
+        (
+            self.config,
+            self.surface,
+            self.render_pipeline,
+            self.vertex_buffer,
+            self.queue,
+            self.device,
+        ) = create_gpu_state(&window);
 
-        // Create wgpu instance and surface
-        let instance = wgpu::Instance::default();
-        let surface = instance.create_surface(window).unwrap();
-
-
-        // Choose an adapter (your GPU)
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        })).expect("Failed to find an appropriate adapter");
-
-        let (device, queue) = pollster::block_on(
-            adapter.request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    required_features: wgpu::Features::empty(),
-                    required_limits: if cfg!(target_arch = "wasm32") {
-                        wgpu::Limits::downlevel_webgl2_defaults()
-                    } else {
-                        wgpu::Limits::default()
-                    },
-                    memory_hints: wgpu::MemoryHints::default(),
-                    trace: wgpu::Trace::Off,
-                }
-            )
-        ).unwrap();
-
-        let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps.formats[0]; // Choose a supported format
-
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: window.inner_size().width,
-            height: window.inner_size().height,
-            present_mode: wgpu::PresentMode::Fifo,
-            desired_maximum_frame_latency: 2,
-            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
-            view_formats: vec![],
-        };
-        surface.configure(&device, &config);
-
-        // Setup pipeline + vertex buffer
-        self.render_pipeline = Some(create_pipeline(&device, &config));
-        self.vertex_buffer = Some(create_quad_vertex_buffer(&device));
-
-        let raw = instance.create_surface(&*window).unwrap();              // Surface<'_>
-        let surface = unsafe {
-            std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(raw)
-        };
-        self.surface = Some(surface);
-
-        self.device = Some(device);
-        self.queue = Some(queue);
-        self.config = Some(config);
+        window.request_redraw();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
-                println!("The close button was pressed; stopping");
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                // Redraw the application.
-                //
-                // It's preferable for applications that do not render continuously to render in
-                // this event rather than in AboutToWait, since rendering in here allows
-                // the program to gracefully handle redraws requested by the OS.
+                // 1) grab wgpu state
+                let surface = self.surface.as_ref().unwrap();
+                let device = self.device.as_ref().unwrap();
+                let queue = self.queue.as_ref().unwrap();
+                let config = self.config.as_ref().unwrap();
+                let pipeline = self.render_pipeline.as_ref().unwrap();
+                let vertex_buffer = self.vertex_buffer.as_ref().unwrap();
 
-                // Draw.
+                // 2) acquire next frame
+                let frame = surface.get_current_texture().unwrap();
+                let view = frame.texture.create_view(&Default::default());
 
-                // Queue a RedrawRequested event.
-                //
-                // You only need to call this if you've determined that you need to redraw in
-                // applications which do not always need to. Applications that redraw continuously
-                // can render here instead.
+                // 3) encode a render pass that clears green and draws the quad
+                let mut encoder = device.create_command_encoder(&Default::default());
+                {
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Render Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::RED),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        occlusion_query_set: None,
+                        timestamp_writes: None,
+                    });
+                    rpass.set_pipeline(pipeline);
+                    rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                    rpass.draw(0..4, 0..1);
+                }
+
+                // 4) submit + present
+                queue.submit(Some(encoder.finish()));
+                frame.present();
+
+                // 5) schedule next frame (for continuous rendering)
                 self.window.as_ref().unwrap().request_redraw();
             }
-            _ => (),
+            _ => {}
         }
     }
 }
