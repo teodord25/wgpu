@@ -1,7 +1,10 @@
 use std::sync::Arc;
+use std::time::Instant;
+use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 use crate::vertex;
+use crate::uniform;
 
 pub struct RenderResources {
     surface: wgpu::Surface<'static>,
@@ -10,6 +13,9 @@ pub struct RenderResources {
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
+    uniform_buffer: wgpu::Buffer,
+    uniform_bind_group: wgpu::BindGroup,
+    start_time: Instant,
 }
 
 pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
@@ -55,7 +61,37 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
     };
     surface.configure(&device, &config);
 
-    let pipeline = create_pipeline(&device, &config);
+    let uniforms = uniform::Uniforms::new();
+    let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Uniform Buffer"),
+        contents: bytemuck::cast_slice(&[uniforms]),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+
+    let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+        label: Some("Uniform Bind Group Layout"),
+    });
+
+    let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout: &uniform_bind_group_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: uniform_buffer.as_entire_binding(),
+        }],
+        label: Some("Uniform Bind Group"),
+    });
+
+    let pipeline = create_pipeline(&device, &config, &uniform_bind_group_layout);
     let vertex_buffer = vertex::create_quad_vertex_buffer(&device);
 
     RenderResources {
@@ -65,6 +101,9 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
         config,
         pipeline,
         vertex_buffer,
+        uniform_buffer,
+        uniform_bind_group,
+        start_time: std::time::Instant::now(),
     }
 }
 
@@ -72,6 +111,7 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
 fn create_pipeline(
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
+    uniform_bind_group_layout: &wgpu::BindGroupLayout
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Basic Shader"),
@@ -80,7 +120,7 @@ fn create_pipeline(
 
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Pipeline Layout"),
-        bind_group_layouts: &[],
+        bind_group_layouts: &[uniform_bind_group_layout],
         push_constant_ranges: &[],
     });
 
@@ -142,8 +182,15 @@ impl RenderResources {
             });
             rpass.set_pipeline(&self.pipeline);
             rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+
+            rpass.set_bind_group(0, &self.uniform_bind_group, &[]);
+
             rpass.draw(0..4, 0..1);
         }
+
+        let elapsed_time = self.start_time.elapsed().as_secs_f32();
+        let uniforms = uniform::Uniforms { time: elapsed_time };
+        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
         // 4) submit + present
         self.queue.submit(Some(encoder.finish()));

@@ -3,6 +3,7 @@ use winit::event_loop::{ControlFlow, EventLoop};
 mod app;
 mod gpu;
 mod vertex;
+mod uniform;
 
 fn main() {
     let event_loop = EventLoop::new().unwrap();
