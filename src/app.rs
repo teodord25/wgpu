@@ -64,7 +64,7 @@ impl ApplicationHandler for App {
                     let zoom_speed = 0.1;
                     let scale = 1.0 - raw_scroll * zoom_speed;
 
-                    gpu.uniforms.zoom = (gpu.uniforms.zoom * scale).clamp(0.1, 100.0);
+                    gpu.uniforms.zoom = (gpu.uniforms.zoom * scale).max(0.1);
                     println!("Updated zoom: {}", gpu.uniforms.zoom);
 
                     self.window.as_ref().unwrap().request_redraw();
