@@ -19,16 +19,16 @@ impl Vertex {
 pub fn create_quad_vertex_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     let verts = [
         Vertex {
-            position: [-0.5, -0.5],
+            position: [-1.0, -1.0],
         },
         Vertex {
-            position: [0.5, -0.5],
+            position: [1.0, -1.0],
         },
         Vertex {
-            position: [-0.5, 0.5],
+            position: [-1.0, 1.0],
         },
         Vertex {
-            position: [0.5, 0.5],
+            position: [1.0, 1.0],
         },
     ];
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
