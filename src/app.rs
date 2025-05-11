@@ -75,8 +75,8 @@ impl ApplicationHandler for App {
                     let (x, y) = (position.x as f32, position.y as f32);
                     if gpu.dragging {
                         let (width, height) = gpu.resolution();
-                        let dx = (x - gpu.last_mouse_pos.0) / width * 2.0 * gpu.uniforms.zoom;
-                        let dy = (y - gpu.last_mouse_pos.1) / height * 2.0 * gpu.uniforms.zoom;
+                        let dx = (x - gpu.last_mouse_pos.0) / width / gpu.uniforms.zoom;
+                        let dy = (y - gpu.last_mouse_pos.1) / height / gpu.uniforms.zoom;
                         gpu.uniforms.center[0] -= dx;
                         gpu.uniforms.center[1] -= dy;
                     }
