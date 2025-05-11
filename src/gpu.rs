@@ -155,6 +155,10 @@ fn create_pipeline(
 }
 
 impl RenderResources {
+    pub fn resolution(&self) -> (f32, f32) {
+        (self.config.width as f32, self.config.height as f32)
+    }
+
     pub fn render(&mut self, window: &Option<Arc<Window>>) {
         // 1) state already ready
 
