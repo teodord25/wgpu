@@ -1,3 +1,4 @@
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Instant;
 use wgpu::util::DeviceExt;
@@ -16,6 +17,10 @@ pub struct RenderResources {
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     start_time: Instant,
+
+    pub uniforms: uniform::Uniforms,
+    pub dragging: bool,
+    pub last_mouse_pos: (f32, f32),
 }
 
 pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
@@ -68,6 +73,8 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
+    println!("Uniforms size: {}", std::mem::size_of::<uniform::Uniforms>());
+
     let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
@@ -75,7 +82,7 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: None,
+                min_binding_size: Some(NonZeroU64::new(std::mem::size_of::<uniform::Uniforms>() as u64).unwrap()),
             },
             count: None,
         }],
@@ -104,6 +111,10 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
         uniform_buffer,
         uniform_bind_group,
         start_time: std::time::Instant::now(),
+
+        uniforms: uniform::Uniforms::new(),
+        dragging: false,
+        last_mouse_pos: (0.0, 0.0),
     }
 }
 
@@ -193,8 +204,10 @@ impl RenderResources {
         }
 
         let elapsed_time = self.start_time.elapsed().as_secs_f32();
-        let uniforms = uniform::Uniforms { time: elapsed_time };
-        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        self.uniforms.time = elapsed_time;
+
+        // write updated uniforms to GPU
+        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[self.uniforms]));
 
         // 4) submit + present
         self.queue.submit(Some(encoder.finish()));
