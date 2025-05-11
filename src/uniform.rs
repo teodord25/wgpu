@@ -15,7 +15,7 @@ impl Uniforms {
         Self {
             time: 0.0,
             _pad0: 0.0,
-            center: [-0.5, 0.0],
+            center: [-0.0, -1.0],
             zoom: 1.0,
             _pad1: 0.0,
         }
