@@ -75,6 +75,25 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        while let Ok(ev) = self.shader_rx.try_recv() {
+            // does this event touch shader.wgsl?
+            if ev.paths.iter().any(|p| p.ends_with("shader.wgsl")) {
+                match ev.kind {
+                    EventKind::Modify(_)
+                  | EventKind::Create(_)
+                  | EventKind::Remove(_) => { 
+                      if std::path::Path::new("src/shaders/shader.wgsl").exists() {
+                          println!("🔄 shader changed ({:?}), reloading…", ev.kind);
+                          self.gpu.as_mut().unwrap().reload_shader_pipeline();
+                      } else {
+                          println!("⚠️ shader file missing, skipping reload");
+                      }
+                  },
+                    _ => {},
+                }
+            }
+        }
+
         if let Some(gpu) = self.gpu.as_mut() {
             match event {
                 WindowEvent::CloseRequested => event_loop.exit(),

@@ -126,7 +126,7 @@ fn create_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Basic Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
     });
 
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -208,6 +208,37 @@ fn create_pipeline_with_shader(
 }
 
 impl RenderResources {
+    pub fn reload_shader_pipeline(&mut self) {
+        // re-read shader source from disk
+        let source = std::fs::read_to_string("src/shaders/shader.wgsl").unwrap();
+        // recreate shader module
+        let module = self.device.create_shader_module(
+            wgpu::ShaderModuleDescriptor {
+                label: Some("Hot‑reloaded Shader"),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            }
+        );
+
+        let uniform_bind_group_layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(std::mem::size_of::<uniform::Uniforms>() as u64).unwrap()),
+                },
+                count: None,
+            }],
+            label: Some("Uniform Bind Group Layout"),
+        });
+
+        let pipeline = create_pipeline_with_shader(&self.device, &self.config, &uniform_bind_group_layout, &module);
+        self.pipeline = pipeline;
+
+        println!("✅ shader pipeline reloaded");
+    }
+
     pub fn resolution(&self) -> (f32, f32) {
         (self.config.width as f32, self.config.height as f32)
     }
