@@ -165,6 +165,48 @@ fn create_pipeline(
     })
 }
 
+fn create_pipeline_with_shader(
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+    uniform_bind_group_layout: &wgpu::BindGroupLayout,
+    shader: &wgpu::ShaderModule,
+) -> wgpu::RenderPipeline {
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Pipeline Layout"),
+        bind_group_layouts: &[uniform_bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        cache: None,
+        label: Some("Render Pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            compilation_options: Default::default(),
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[vertex::Vertex::LAYOUT],
+        },
+        fragment: Some(wgpu::FragmentState {
+            compilation_options: Default::default(),
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: config.format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: Default::default(),
+        multiview: None,
+    })
+}
+
 impl RenderResources {
     pub fn resolution(&self) -> (f32, f32) {
         (self.config.width as f32, self.config.height as f32)
