@@ -1,5 +1,8 @@
+use std::path::Path;
+use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 
+use notify::{Event, EventKind, RecommendedWatcher, Watcher};
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalSize, Size};
 use winit::event::StartCause;
@@ -10,10 +13,40 @@ use winit::event::{MouseScrollDelta, ElementState, MouseButton};
 
 use crate::gpu;
 
-#[derive(Default)]
 pub struct App {
     window: Option<Arc<Window>>,
     gpu: Option<gpu::RenderResources>,
+
+    shader_rx: Receiver<Event>,
+    #[allow(dead_code)]
+    shader_watcher: RecommendedWatcher, // keep it alive
+}
+
+impl Default for App {
+    fn default() -> Self {
+        let (tx, rx) = mpsc::channel::<Event>();
+
+        let mut watcher: RecommendedWatcher =
+            notify::recommended_watcher(move |res| {
+                if let Ok(event) = res {
+                    let _ = tx.send(event);
+                }
+            })
+            .expect("watcher init failed");
+
+        let path = Path::new("src/shaders");
+        watcher
+            .watch(path, notify::RecursiveMode::NonRecursive)
+            .expect("watch failed");
+
+        App {
+            window: None,
+            gpu: None,
+
+            shader_rx: rx,
+            shader_watcher: watcher,
+        }
+    }
 }
 
 impl ApplicationHandler for App {
