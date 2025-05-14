@@ -2,6 +2,7 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Instant;
 use wgpu::util::DeviceExt;
+use wgpu::StoreOp;
 use winit::window::Window;
 
 use crate::vertex;
@@ -21,6 +22,31 @@ pub struct RenderResources {
     pub uniforms: uniform::Uniforms,
     pub dragging: bool,
     pub last_mouse_pos: (f32, f32),
+
+    pub depth_view: wgpu::TextureView,
+}
+
+fn create_depth_view(
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+) -> wgpu::TextureView {
+    let size = wgpu::Extent3d {
+        width: config.width,
+        height: config.height,
+        depth_or_array_layers: 1,
+    };
+    let desc = wgpu::TextureDescriptor {
+        label: Some("depth_texture"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    };
+    let texture = device.create_texture(&desc);
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
@@ -100,6 +126,7 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
 
     let pipeline = create_pipeline(&device, &config, &uniform_bind_group_layout);
     let vertex_buffer = vertex::create_quad_vertex_buffer(&device);
+    let depth_view = create_depth_view(&device, &config);
 
     RenderResources {
         surface,
@@ -115,6 +142,8 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
         uniforms: uniform::Uniforms::new(),
         dragging: false,
         last_mouse_pos: (0.0, 0.0),
+
+        depth_view,
     }
 }
 
@@ -264,7 +293,15 @@ impl RenderResources {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
