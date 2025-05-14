@@ -15,6 +15,8 @@ pub struct RenderResources {
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    num_indices: u32,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     start_time: Instant,
@@ -125,8 +127,21 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
     });
 
     let pipeline = create_pipeline(&device, &config, &uniform_bind_group_layout);
-    let vertex_buffer = vertex::create_quad_vertex_buffer(&device);
     let depth_view = create_depth_view(&device, &config);
+
+    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Cube Vertex Buffer"),
+        contents: bytemuck::cast_slice(vertex::VERTICES),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+
+    let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Cube Index Buffer"),
+        contents: bytemuck::cast_slice(vertex::INDICES),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+
+    let num_indices = vertex::INDICES.len() as u32;
 
     RenderResources {
         surface,
@@ -134,7 +149,11 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
         queue,
         config,
         pipeline,
+
         vertex_buffer,
+        index_buffer,
+        num_indices,
+
         uniform_buffer,
         uniform_bind_group,
         start_time: std::time::Instant::now(),
@@ -153,9 +172,14 @@ fn create_pipeline(
     config: &wgpu::SurfaceConfiguration,
     uniform_bind_group_layout: &wgpu::BindGroupLayout
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Basic Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
+
+    let vs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Cube VS"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/cube.vert.wgsl").into()),
+    });
+    let fs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Cube FS"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/cube.frag.wgsl").into()),
     });
 
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -170,13 +194,13 @@ fn create_pipeline(
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             compilation_options: Default::default(),
-            module: &shader,
+            module: &vs_module,
             entry_point: Some("vs_main"),
-            buffers: &[vertex::Vertex::LAYOUT],
+            buffers: &[vertex::Vertex::desc()],
         },
         fragment: Some(wgpu::FragmentState {
             compilation_options: Default::default(),
-            module: &shader,
+            module: &fs_module,
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: config.format,
@@ -185,10 +209,17 @@ fn create_pipeline(
             })],
         }),
         primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
             ..Default::default()
         },
-        depth_stencil: None,
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less, // passes if new depth < old
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
         multisample: Default::default(),
         multiview: None,
     })
@@ -198,7 +229,8 @@ fn create_pipeline_with_shader(
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
     uniform_bind_group_layout: &wgpu::BindGroupLayout,
-    shader: &wgpu::ShaderModule,
+    vs_shader: &wgpu::ShaderModule,
+    fs_shader: &wgpu::ShaderModule,
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Pipeline Layout"),
@@ -212,13 +244,13 @@ fn create_pipeline_with_shader(
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             compilation_options: Default::default(),
-            module: &shader,
+            module: &vs_shader,
             entry_point: Some("vs_main"),
-            buffers: &[vertex::Vertex::LAYOUT],
+            buffers: &[vertex::Vertex::desc()],
         },
         fragment: Some(wgpu::FragmentState {
             compilation_options: Default::default(),
-            module: &shader,
+            module: &fs_shader,
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: config.format,
@@ -227,10 +259,17 @@ fn create_pipeline_with_shader(
             })],
         }),
         primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
             ..Default::default()
         },
-        depth_stencil: None,
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less, // passes if new depth < old
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
         multisample: Default::default(),
         multiview: None,
     })
@@ -238,15 +277,14 @@ fn create_pipeline_with_shader(
 
 impl RenderResources {
     pub fn reload_shader_pipeline(&mut self) {
-        // re-read shader source from disk
-        let source = std::fs::read_to_string("src/shaders/shader.wgsl").unwrap();
-        // recreate shader module
-        let module = self.device.create_shader_module(
-            wgpu::ShaderModuleDescriptor {
-                label: Some("Hot‑reloaded Shader"),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            }
-        );
+        let vs_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Cube VS"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/cube.vert.wgsl").into()),
+        });
+        let fs_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Cube FS"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/cube.frag.wgsl").into()),
+        });
 
         let uniform_bind_group_layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -262,7 +300,7 @@ impl RenderResources {
             label: Some("Uniform Bind Group Layout"),
         });
 
-        let pipeline = create_pipeline_with_shader(&self.device, &self.config, &uniform_bind_group_layout, &module);
+        let pipeline = create_pipeline_with_shader(&self.device, &self.config, &uniform_bind_group_layout, &vs_module, &fs_module);
         self.pipeline = pipeline;
 
         println!("✅ shader pipeline reloaded");
@@ -307,10 +345,11 @@ impl RenderResources {
             });
             rpass.set_pipeline(&self.pipeline);
             rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
             rpass.set_bind_group(0, &self.uniform_bind_group, &[]);
 
-            rpass.draw(0..4, 0..1);
+            rpass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
 
         let elapsed_time = self.start_time.elapsed().as_secs_f32();

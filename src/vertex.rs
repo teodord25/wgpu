@@ -1,39 +1,65 @@
 use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct Vertex {
-    position: [f32; 2],
+    pub position: [f32; 3],
+    pub normal:   [f32; 3],
 }
 
 impl Vertex {
-    // describes the memory layout to wgpu
-    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x2],
-    };
+    pub const ATTRIBS: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+
+    pub fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode:    wgpu::VertexStepMode::Vertex,
+            attributes:   &Self::ATTRIBS,
+        }
+    }
 }
 
-pub fn create_quad_vertex_buffer(device: &wgpu::Device) -> wgpu::Buffer {
-    let verts = [
-        Vertex {
-            position: [-1.0, -1.0],
-        },
-        Vertex {
-            position: [1.0, -1.0],
-        },
-        Vertex {
-            position: [-1.0, 1.0],
-        },
-        Vertex {
-            position: [1.0, 1.0],
-        },
-    ];
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Quad Vertex Buffer"),
-        contents: bytemuck::cast_slice(&verts),
-        usage: wgpu::BufferUsages::VERTEX,
-    })
-}
+// 24 vertices (4 per face) so each face can have its own normal
+pub const VERTICES: &[Vertex] = &[
+    // +X
+    Vertex { position: [ 1., -1., -1.], normal: [1., 0., 0.] },
+    Vertex { position: [ 1.,  1., -1.], normal: [1., 0., 0.] },
+    Vertex { position: [ 1.,  1.,  1.], normal: [1., 0., 0.] },
+    Vertex { position: [ 1., -1.,  1.], normal: [1., 0., 0.] },
+    // -X
+    Vertex { position: [-1., -1.,  1.], normal: [-1., 0., 0.] },
+    Vertex { position: [-1.,  1.,  1.], normal: [-1., 0., 0.] },
+    Vertex { position: [-1.,  1., -1.], normal: [-1., 0., 0.] },
+    Vertex { position: [-1., -1., -1.], normal: [-1., 0., 0.] },
+    // +Y
+    Vertex { position: [-1.,  1., -1.], normal: [0., 1., 0.] },
+    Vertex { position: [-1.,  1.,  1.], normal: [0., 1., 0.] },
+    Vertex { position: [ 1.,  1.,  1.], normal: [0., 1., 0.] },
+    Vertex { position: [ 1.,  1., -1.], normal: [0., 1., 0.] },
+    // -Y
+    Vertex { position: [-1., -1.,  1.], normal: [0., -1., 0.] },
+    Vertex { position: [-1., -1., -1.], normal: [0., -1., 0.] },
+    Vertex { position: [ 1., -1., -1.], normal: [0., -1., 0.] },
+    Vertex { position: [ 1., -1.,  1.], normal: [0., -1., 0.] },
+    // +Z
+    Vertex { position: [-1., -1.,  1.], normal: [0., 0., 1.] },
+    Vertex { position: [ 1., -1.,  1.], normal: [0., 0., 1.] },
+    Vertex { position: [ 1.,  1.,  1.], normal: [0., 0., 1.] },
+    Vertex { position: [-1.,  1.,  1.], normal: [0., 0., 1.] },
+    // -Z
+    Vertex { position: [ 1., -1., -1.], normal: [0., 0., -1.] },
+    Vertex { position: [-1., -1., -1.], normal: [0., 0., -1.] },
+    Vertex { position: [-1.,  1., -1.], normal: [0., 0., -1.] },
+    Vertex { position: [ 1.,  1., -1.], normal: [0., 0., -1.] },
+];
+
+// 6 faces × 2 triangles × 3 indices = 36
+pub const INDICES: &[u16] = &[
+     0,  1,  2,  0,  2,  3,   // +X
+     4,  5,  6,  4,  6,  7,   // -X
+     8,  9, 10,  8, 10, 11,   // +Y
+    12, 13, 14, 12, 14, 15,   // -Y
+    16, 17, 18, 16, 18, 19,   // +Z
+    20, 21, 22, 20, 22, 23,   // -Z
+];
