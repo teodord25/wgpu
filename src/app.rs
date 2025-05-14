@@ -1,5 +1,3 @@
-use std::ffi::OsStr;
-use std::fs::{self, ReadDir};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
@@ -13,13 +11,13 @@ use winit::event::StartCause;
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
-use winit::event::{MouseScrollDelta, ElementState, MouseButton};
+use winit::event::{ElementState, MouseButton};
 
-use crate::gpu;
+use crate::gpu::{self, GpuState};
 
 pub struct App {
     window: Option<Arc<Window>>,
-    gpu: Option<gpu::RenderResources>,
+    gpu: Option<GpuState>,
 
     shader_rx: Receiver<Event>,
     last_reload: Instant,

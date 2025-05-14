@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+use std::ops::Deref;
 use std::{fs, num::NonZeroU64};
 use std::sync::Arc;
 use std::time::Instant;
@@ -8,7 +10,30 @@ use glam::{Mat4, Vec3};
 
 use crate::vertex;
 
-pub struct RenderResources {
+struct UBOs {
+    camera_buffer: wgpu::Buffer,
+    model_buffer:  wgpu::Buffer,
+    light_buffer:  wgpu::Buffer,
+}
+
+struct VertexShader(wgpu::ShaderModule);
+struct FragmentShader(wgpu::ShaderModule);
+
+impl Deref for VertexShader {
+    type Target = wgpu::ShaderModule;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Deref for FragmentShader {
+    type Target = wgpu::ShaderModule;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub struct GpuState {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -18,9 +43,7 @@ pub struct RenderResources {
     index_buffer: wgpu::Buffer,
     num_indices: u32,
 
-    camera_buffer: wgpu::Buffer,
-    model_buffer:  wgpu::Buffer,
-    light_buffer:  wgpu::Buffer,
+    ubos: UBOs,
     ubo_bind_group: wgpu::BindGroup,
 
     start_time: Instant,
@@ -54,12 +77,13 @@ fn create_depth_view(
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
-pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
-    // create wgpu instance and surface
+pub fn create_gpu_state(window: &Arc<Window>) -> GpuState {
     let instance = wgpu::Instance::default();
-
-    let raw = instance.create_surface(window).unwrap();
-    let surface = unsafe { std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(raw) };
+    let surface = unsafe {
+        std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(
+            instance.create_surface(window).unwrap()
+        )
+    };
 
     // choose an adapter
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -137,7 +161,6 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
             ],
     });
 
-
     // 2.1 Camera UBO
     let aspect = config.width as f32 / config.height as f32;
     let proj   = Mat4::perspective_rh_gl(45f32.to_radians(), aspect, 0.1, 100.0);
@@ -190,7 +213,10 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
         label: Some("UBO Bind Group"),
     });
 
-    let pipeline = create_pipeline(&device, &config, &uniform_bind_group_layout);
+    let vs_module = VertexShader(load_shader("Cube VS", "src/shaders/cube.vert.wgsl", &device));
+    let fs_module = FragmentShader(load_shader("Cube FS", "src/shaders/cube.frag.wgsl", &device));
+
+    let pipeline = create_pipeline(&device, &config, &uniform_bind_group_layout, &vs_module, &fs_module);
     let depth_view = create_depth_view(&device, &config);
 
     let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -207,7 +233,7 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
 
     let num_indices = vertex::INDICES.len() as u32;
 
-    RenderResources {
+    GpuState {
         surface,
         device,
         queue,
@@ -218,9 +244,7 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
         index_buffer,
         num_indices,
 
-        camera_buffer,
-        model_buffer,
-        light_buffer,
+        ubos: UBOs { camera_buffer, model_buffer, light_buffer },
         ubo_bind_group,
 
         start_time: std::time::Instant::now(),
@@ -232,71 +256,12 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
     }
 }
 
-// Builds a very basic render pipeline that draws in solid green
 fn create_pipeline(
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
-    uniform_bind_group_layout: &wgpu::BindGroupLayout
-) -> wgpu::RenderPipeline {
-
-    let vs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Cube VS"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/cube.vert.wgsl").into()),
-    });
-    let fs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Cube FS"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/cube.frag.wgsl").into()),
-    });
-
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Pipeline Layout"),
-        bind_group_layouts: &[uniform_bind_group_layout],
-        push_constant_ranges: &[],
-    });
-
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        cache: None,
-        label: Some("Render Pipeline"),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            compilation_options: Default::default(),
-            module: &vs_module,
-            entry_point: Some("vs_main"),
-            buffers: &[vertex::Vertex::desc()],
-        },
-        fragment: Some(wgpu::FragmentState {
-            compilation_options: Default::default(),
-            module: &fs_module,
-            entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: config.format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less, // passes if new depth < old
-            stencil: Default::default(),
-            bias: Default::default(),
-        }),
-        multisample: Default::default(),
-        multiview: None,
-    })
-}
-
-fn create_pipeline_with_shader(
-    device: &wgpu::Device,
-    config: &wgpu::SurfaceConfiguration,
     uniform_bind_group_layout: &wgpu::BindGroupLayout,
-    vs_shader: &wgpu::ShaderModule,
-    fs_shader: &wgpu::ShaderModule,
+    vs_shader: &VertexShader,
+    fs_shader: &FragmentShader,
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Pipeline Layout"),
@@ -341,22 +306,19 @@ fn create_pipeline_with_shader(
     })
 }
 
-impl RenderResources {
+
+pub fn load_shader(label: &str, path: &str, device: &wgpu::Device) -> wgpu::ShaderModule {
+    let src = fs::read_to_string(path).expect("failed to read shader file");
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(label),
+            source: wgpu::ShaderSource::Wgsl(src.into()),
+    })
+}
+
+impl GpuState {
     pub fn reload_shader_pipeline(&mut self) {
-
-        let vs_src = fs::read_to_string("src/shaders/cube.vert.wgsl")
-            .expect("Failed to re-read vertex shader");
-        let fs_src = fs::read_to_string("src/shaders/cube.frag.wgsl")
-            .expect("Failed to re-read fragment shader");
-
-        let vs_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Cube VS"),
-            source: wgpu::ShaderSource::Wgsl(vs_src.into()),
-        });
-        let fs_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Cube FS"),
-            source: wgpu::ShaderSource::Wgsl(fs_src.into()),
-        });
+        let vs_module = VertexShader(load_shader("Cube VS", "src/shaders/cube.vert.wgsl", &self.device));
+        let fs_module = FragmentShader(load_shader("Cube FS", "src/shaders/cube.frag.wgsl", &self.device));
 
         let uniform_bind_group_layout =
             self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -398,7 +360,7 @@ impl RenderResources {
                 ],
         });
 
-        let pipeline = create_pipeline_with_shader(&self.device, &self.config, &uniform_bind_group_layout, &vs_module, &fs_module);
+        let pipeline = create_pipeline(&self.device, &self.config, &uniform_bind_group_layout, &vs_module, &fs_module);
         self.pipeline = pipeline;
 
         println!("✅ shader pipeline reloaded");
@@ -452,7 +414,7 @@ impl RenderResources {
 
         let t = self.start_time.elapsed().as_secs_f32();
         let model_rot: [[f32;4];4] = Mat4::from_rotation_y(t).to_cols_array_2d();
-        self.queue.write_buffer(&self.model_buffer, 0, bytemuck::cast_slice(&model_rot));
+        self.queue.write_buffer(&self.ubos.model_buffer, 0, bytemuck::cast_slice(&model_rot));
 
         // 4) submit + present
         self.queue.submit(Some(encoder.finish()));
