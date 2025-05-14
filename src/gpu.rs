@@ -97,38 +97,6 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
     };
     surface.configure(&device, &config);
 
-    // 1️⃣ Camera UBO: view_proj matrix (4×4 f32 = 64 bytes)
-    let aspect = config.width as f32 / config.height as f32;
-    let proj   = Mat4::perspective_rh_gl(45f32.to_radians(), aspect, 0.1, 100.0);
-    let view   = Mat4::look_at_rh(Vec3::new(3.,2.,4.), Vec3::ZERO, Vec3::Y);
-    let view_proj: [[f32;4];4] = (proj * view).to_cols_array_2d();
-
-    let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label:    Some("Camera UBO"),
-        contents: bytemuck::cast_slice(&view_proj),  // &[ [f32;4];4 ]
-        usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
-
-    // 2️⃣ Model UBO: identity matrix to start (also 64 bytes)
-    let model_mat: [[f32;4];4] = Mat4::IDENTITY.to_cols_array_2d();
-    let model_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label:    Some("Model UBO"),
-        contents: bytemuck::cast_slice(&model_mat),  // &[ [f32;4];4 ]
-        usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
-
-    // 3️⃣ Light UBO: two vec4s (direction.xyz+pad, color.xyz+pad) = 32 bytes
-    // Here we pack dir.xyz into [f32;4] (last component unused), same for color.
-    let light_dir_color: [[f32;4];2] = [
-        [ 0.0, -1.0, -1.0, 0.0 ],  // light direction
-        [ 1.0,  1.0,  1.0, 0.0 ],  // light color
-    ];
-    let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label:    Some("Light UBO"),
-        contents: bytemuck::cast_slice(&light_dir_color),  // &[ [f32;4];2 ]
-        usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
-
     let uniform_bind_group_layout =
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("UBO Bind Group Layout"),
@@ -192,16 +160,14 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
 
     // 2.3 Light UBO
     // direction + color, pad to 16 bytes
-    let light_data: [f32;4] = [ 0.0, -1.0, -1.0, 0.0 ]; // dir.xyz + pad
-    let light_color: [f32;4] = [ 1.0, 1.0, 1.0, 0.0 ];
-    let mut light_buf_data = Vec::new();
-    light_buf_data.extend_from_slice(&light_data);
-    light_buf_data.extend_from_slice(&light_color);
-
+    let light_dir_color: [[f32;4];2] = [
+        [ 0.0, -1.0, -1.0, 0.0 ],  // light direction
+        [ 0.0,  1.0,  1.0, 0.0 ],  // light color
+    ];
     let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Light UBO"),
-        contents: &bytemuck::cast_slice(&light_buf_data),
-        usage:  wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        label:    Some("Light UBO"),
+        contents: bytemuck::cast_slice(&light_dir_color),  // &[ [f32;4];2 ]
+        usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
     // 2.4 Single bind group with 3 entries
