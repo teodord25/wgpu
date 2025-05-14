@@ -11,7 +11,7 @@ use std::time::Instant;
 use wgpu::util::DeviceExt;
 use wgpu::StoreOp;
 use winit::window::Window;
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Quat, Vec3};
 
 use crate::vertex;
 
@@ -369,8 +369,15 @@ impl GpuState {
         }
 
         let t = self.start_time.elapsed().as_secs_f32();
-        let model_rot: [[f32;4];4] = Mat4::from_rotation_y(t).to_cols_array_2d();
-        self.queue.write_buffer(&self.ubos.model_buffer, 0, bytemuck::cast_slice(&model_rot));
+        let model_rot = Mat4::from_quat(
+            Quat::from_rotation_y(t)
+          * Quat::from_rotation_x(t)
+          * Quat::from_rotation_z(t)
+        );
+
+        let model_matrix: [[f32;4];4]  = model_rot.to_cols_array_2d();
+
+        self.queue.write_buffer(&self.ubos.model_buffer, 0, bytemuck::cast_slice(&model_matrix));
 
         // 4) submit + present
         self.queue.submit(Some(encoder.finish()));
