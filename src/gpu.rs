@@ -1,12 +1,12 @@
-use std::num::NonZeroU64;
+use std::{fs, num::NonZeroU64};
 use std::sync::Arc;
 use std::time::Instant;
 use wgpu::util::DeviceExt;
 use wgpu::StoreOp;
 use winit::window::Window;
+use glam::{Mat4, Vec3};
 
 use crate::vertex;
-use crate::uniform;
 
 pub struct RenderResources {
     surface: wgpu::Surface<'static>,
@@ -17,11 +17,14 @@ pub struct RenderResources {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
-    uniform_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
+
+    camera_buffer: wgpu::Buffer,
+    model_buffer:  wgpu::Buffer,
+    light_buffer:  wgpu::Buffer,
+    ubo_bind_group: wgpu::BindGroup,
+
     start_time: Instant,
 
-    pub uniforms: uniform::Uniforms,
     pub dragging: bool,
     pub last_mouse_pos: (f32, f32),
 
@@ -94,36 +97,131 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
     };
     surface.configure(&device, &config);
 
-    let uniforms = uniform::Uniforms::new();
-    let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Uniform Buffer"),
-        contents: bytemuck::cast_slice(&[uniforms]),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    // 1️⃣ Camera UBO: view_proj matrix (4×4 f32 = 64 bytes)
+    let aspect = config.width as f32 / config.height as f32;
+    let proj   = Mat4::perspective_rh_gl(45f32.to_radians(), aspect, 0.1, 100.0);
+    let view   = Mat4::look_at_rh(Vec3::new(3.,2.,4.), Vec3::ZERO, Vec3::Y);
+    let view_proj: [[f32;4];4] = (proj * view).to_cols_array_2d();
+
+    let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label:    Some("Camera UBO"),
+        contents: bytemuck::cast_slice(&view_proj),  // &[ [f32;4];4 ]
+        usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
-    println!("Uniforms size: {}", std::mem::size_of::<uniform::Uniforms>());
-
-    let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: Some(NonZeroU64::new(std::mem::size_of::<uniform::Uniforms>() as u64).unwrap()),
-            },
-            count: None,
-        }],
-        label: Some("Uniform Bind Group Layout"),
+    // 2️⃣ Model UBO: identity matrix to start (also 64 bytes)
+    let model_mat: [[f32;4];4] = Mat4::IDENTITY.to_cols_array_2d();
+    let model_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label:    Some("Model UBO"),
+        contents: bytemuck::cast_slice(&model_mat),  // &[ [f32;4];4 ]
+        usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
-    let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+    // 3️⃣ Light UBO: two vec4s (direction.xyz+pad, color.xyz+pad) = 32 bytes
+    // Here we pack dir.xyz into [f32;4] (last component unused), same for color.
+    let light_dir_color: [[f32;4];2] = [
+        [ 0.0, -1.0, -1.0, 0.0 ],  // light direction
+        [ 1.0,  1.0,  1.0, 0.0 ],  // light color
+    ];
+    let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label:    Some("Light UBO"),
+        contents: bytemuck::cast_slice(&light_dir_color),  // &[ [f32;4];2 ]
+        usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+
+    let uniform_bind_group_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("UBO Bind Group Layout"),
+            entries: &[
+                // binding 0 = Camera UBO (mat4x4)
+                wgpu::BindGroupLayoutEntry {
+                    binding:    0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty:                wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size:  Some( NonZeroU64::new(64).unwrap() ), // 4×4 f32
+                    },
+                    count: None,
+                },
+                // binding 1 = Model UBO (mat4x4)
+                wgpu::BindGroupLayoutEntry {
+                    binding:    1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty:                wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size:  Some( NonZeroU64::new(64).unwrap() ),
+                    },
+                    count: None,
+                },
+                // binding 2 = Light UBO (vec3 + padding)
+                wgpu::BindGroupLayoutEntry {
+                    binding:    2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty:                wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size:  Some( NonZeroU64::new(32).unwrap() ), // vec3 + pad
+                    },
+                    count: None,
+                },
+            ],
+    });
+
+
+    // 2.1 Camera UBO
+    let aspect = config.width as f32 / config.height as f32;
+    let proj   = Mat4::perspective_rh_gl(45f32.to_radians(), aspect, 0.1, 100.0);
+    let view   = Mat4::look_at_rh(Vec3::new(3.,2.,4.), Vec3::ZERO, Vec3::Y);
+    let view_proj: [[f32;4];4] = (proj * view).to_cols_array_2d();
+
+    let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Camera UBO"),
+        contents: bytemuck::cast_slice(&view_proj),
+        usage:  wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+
+    // 2.2 Model UBO (we’ll rotate around Y)
+    let model_mat: [[f32;4];4] = Mat4::IDENTITY.to_cols_array_2d();
+    let model_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Model UBO"),
+        contents: bytemuck::cast_slice(&model_mat),
+        usage:  wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+
+    // 2.3 Light UBO
+    // direction + color, pad to 16 bytes
+    let light_data: [f32;4] = [ 0.0, -1.0, -1.0, 0.0 ]; // dir.xyz + pad
+    let light_color: [f32;4] = [ 1.0, 1.0, 1.0, 0.0 ];
+    let mut light_buf_data = Vec::new();
+    light_buf_data.extend_from_slice(&light_data);
+    light_buf_data.extend_from_slice(&light_color);
+
+    let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Light UBO"),
+        contents: &bytemuck::cast_slice(&light_buf_data),
+        usage:  wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+
+    // 2.4 Single bind group with 3 entries
+    let ubo_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: &uniform_bind_group_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: uniform_buffer.as_entire_binding(),
-        }],
-        label: Some("Uniform Bind Group"),
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: model_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: light_buffer.as_entire_binding(),
+            },
+        ],
+        label: Some("UBO Bind Group"),
     });
 
     let pipeline = create_pipeline(&device, &config, &uniform_bind_group_layout);
@@ -154,11 +252,13 @@ pub fn create_gpu_state(window: &Arc<Window>) -> RenderResources {
         index_buffer,
         num_indices,
 
-        uniform_buffer,
-        uniform_bind_group,
+        camera_buffer,
+        model_buffer,
+        light_buffer,
+        ubo_bind_group,
+
         start_time: std::time::Instant::now(),
 
-        uniforms: uniform::Uniforms::new(),
         dragging: false,
         last_mouse_pos: (0.0, 0.0),
 
@@ -277,27 +377,59 @@ fn create_pipeline_with_shader(
 
 impl RenderResources {
     pub fn reload_shader_pipeline(&mut self) {
+
+        let vs_src = fs::read_to_string("src/shaders/cube.vert.wgsl")
+            .expect("Failed to re-read vertex shader");
+        let fs_src = fs::read_to_string("src/shaders/cube.frag.wgsl")
+            .expect("Failed to re-read fragment shader");
+
         let vs_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Cube VS"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/cube.vert.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(vs_src.into()),
         });
         let fs_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Cube FS"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/cube.frag.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(fs_src.into()),
         });
 
-        let uniform_bind_group_layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: Some(NonZeroU64::new(std::mem::size_of::<uniform::Uniforms>() as u64).unwrap()),
-                },
-                count: None,
-            }],
-            label: Some("Uniform Bind Group Layout"),
+        let uniform_bind_group_layout =
+            self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("UBO Bind Group Layout"),
+                entries: &[
+                    // binding 0 = Camera UBO (mat4x4)
+                    wgpu::BindGroupLayoutEntry {
+                        binding:    0,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty:                wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size:  Some( NonZeroU64::new(64).unwrap() ), // 4×4 f32
+                        },
+                        count: None,
+                    },
+                    // binding 1 = Model UBO (mat4x4)
+                    wgpu::BindGroupLayoutEntry {
+                        binding:    1,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty:                wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size:  Some( NonZeroU64::new(64).unwrap() ),
+                        },
+                        count: None,
+                    },
+                    // binding 2 = Light UBO (vec3 + padding)
+                    wgpu::BindGroupLayoutEntry {
+                        binding:    2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty:                wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size:  Some( NonZeroU64::new(32).unwrap() ), // vec3 + pad
+                        },
+                        count: None,
+                    },
+                ],
         });
 
         let pipeline = create_pipeline_with_shader(&self.device, &self.config, &uniform_bind_group_layout, &vs_module, &fs_module);
@@ -347,16 +479,14 @@ impl RenderResources {
             rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
-            rpass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            rpass.set_bind_group(0, &self.ubo_bind_group, &[]);
 
             rpass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
 
-        let elapsed_time = self.start_time.elapsed().as_secs_f32();
-        self.uniforms.time = elapsed_time;
-
-        // write updated uniforms to GPU
-        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[self.uniforms]));
+        let t = self.start_time.elapsed().as_secs_f32();
+        let model_rot: [[f32;4];4] = Mat4::from_rotation_y(t).to_cols_array_2d();
+        self.queue.write_buffer(&self.model_buffer, 0, bytemuck::cast_slice(&model_rot));
 
         // 4) submit + present
         self.queue.submit(Some(encoder.finish()));
