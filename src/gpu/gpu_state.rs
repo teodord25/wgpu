@@ -149,7 +149,7 @@ pub fn create_gpu_state(window: &Arc<Window>) -> GpuState {
     // 2.3 Light UBO
     // direction + color, pad to 16 bytes
     let light_dir_color: [[f32;4];2] = [
-        [ 0.0, -1.0, -1.0, 0.0 ],  // light direction
+        [ -0.8, -1.0, -1.0, 0.0 ],  // light direction
         [ 0.0,  1.0,  1.0, 0.0 ],  // light color
     ];
     let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
