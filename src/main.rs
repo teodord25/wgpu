@@ -2,6 +2,7 @@ use winit::event_loop::{ControlFlow, EventLoop};
 
 mod gpu;
 mod app;
+mod camera;
 mod vertex;
 mod uniform;
 
