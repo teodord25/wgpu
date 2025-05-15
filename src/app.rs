@@ -115,6 +115,19 @@ impl ApplicationHandler for App {
                     }
                 },
 
+                WindowEvent::CursorMoved { position, .. } => {
+                    println!("Cursor moved: {:?}", position);
+                    let sensitivity = 0.01;
+                    let (x, y) = (position.x as f32, position.y as f32);
+                    let delta_x = gpu.last_mouse_pos.0 - x;
+                    let delta_y = gpu.last_mouse_pos.1 - y;
+                    if gpu.dragging {
+                        gpu.camera.yaw -= delta_x * sensitivity;
+                        gpu.camera.pitch = (gpu.camera.pitch - delta_y * sensitivity).clamp(-89.0_f32.to_radians(), 89.0_f32.to_radians());
+                    }
+                    gpu.last_mouse_pos = (x, y);
+                }
+
                 _ => {}
             }
         }

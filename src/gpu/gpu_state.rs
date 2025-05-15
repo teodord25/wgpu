@@ -5,13 +5,15 @@ use crate::gpu::{
     load_shader
 };
 
-use std::{num::NonZeroU64};
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Instant;
 use wgpu::util::DeviceExt;
 use wgpu::StoreOp;
 use winit::window::Window;
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Vec3};
+
+use crate::camera::Camera;
 
 use crate::vertex;
 
@@ -36,6 +38,7 @@ pub struct GpuState {
 
     start_time: Instant,
 
+    pub camera: Camera,
     pub dragging: bool,
     pub last_mouse_pos: (f32, f32),
 
@@ -214,6 +217,7 @@ pub fn create_gpu_state(window: &Arc<Window>) -> GpuState {
 
         start_time: std::time::Instant::now(),
 
+        camera: Camera::default(),
         dragging: false,
         last_mouse_pos: (0.0, 0.0),
 
@@ -368,16 +372,26 @@ impl GpuState {
             rpass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
 
-        let t = self.start_time.elapsed().as_secs_f32();
-        let model_rot = Mat4::from_quat(
-            Quat::from_rotation_y(t)
-          * Quat::from_rotation_x(t)
-          * Quat::from_rotation_z(t)
+        let yaw = self.camera.yaw;
+        let pitch = self.camera.pitch;
+
+        self.camera.eye = Vec3::new(
+            self.camera.distance * yaw.cos() * pitch.cos(),
+            self.camera.distance * pitch.sin(),
+            self.camera.distance * yaw.sin() * pitch.cos(),
+        ) + self.camera.target;
+
+        let aspect = self.config.width as f32 / self.config.height as f32;
+        let proj = Mat4::perspective_rh_gl(45f32.to_radians(), aspect, 0.1, 100.0);
+        let view = Mat4::look_at_rh(self.camera.eye, self.camera.target, self.camera.up);
+
+        let view_proj = proj * view;
+
+        self.queue.write_buffer(
+            &self.ubos.camera_buffer,
+            0,
+            bytemuck::cast_slice(&view_proj.to_cols_array_2d()),
         );
-
-        let model_matrix: [[f32;4];4]  = model_rot.to_cols_array_2d();
-
-        self.queue.write_buffer(&self.ubos.model_buffer, 0, bytemuck::cast_slice(&model_matrix));
 
         // 4) submit + present
         self.queue.submit(Some(encoder.finish()));
