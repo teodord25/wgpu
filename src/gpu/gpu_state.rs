@@ -8,6 +8,8 @@ use crate::gpu::{
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
 use std::time::Instant;
+use anyhow::{Context, Result};
+use wgpu::hal::Surface;
 use wgpu::util::DeviceExt;
 use wgpu::StoreOp;
 use winit::window::Window;
@@ -45,23 +47,8 @@ pub struct GpuState {
     pub depth_view: wgpu::TextureView,
 }
 
-pub fn create_gpu_state(window: &Arc<Window>) -> GpuState {
-    let instance = wgpu::Instance::default();
-    let surface = unsafe {
-        std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(
-            instance.create_surface(window).unwrap()
-        )
-    };
-
-    // choose an adapter
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        compatible_surface: Some(&surface),
-        force_fallback_adapter: false,
-    }))
-    .expect("Failed to find an appropriate adapter");
-
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+fn request_device(adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue)> {
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: None,
         required_features: wgpu::Features::empty(),
         required_limits: if cfg!(target_arch = "wasm32") {
@@ -71,9 +58,29 @@ pub fn create_gpu_state(window: &Arc<Window>) -> GpuState {
         },
         memory_hints: wgpu::MemoryHints::default(),
         trace: wgpu::Trace::Off,
-    }))
-    .unwrap();
+    })).context("Failed to request device")
+}
 
+fn create_surface_static(instance: &wgpu::Instance, window: &Arc<Window>) -> wgpu::Surface<'static> {
+    let surface = instance.create_surface(window).expect("Failed to create surface");
+
+    unsafe { std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(surface) }
+}
+
+fn request_adapter(instance: &wgpu::Instance, surface: &wgpu::Surface) -> Result<wgpu::Adapter> {
+    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: Some(&surface),
+        force_fallback_adapter: false,
+    })).context("Failed to request adapter")
+}
+
+pub fn create_gpu_state(window: &Arc<Window>) -> Result<GpuState> {
+    let instance = wgpu::Instance::default();
+    let surface = create_surface_static(&instance, window);
+
+    let adapter = request_adapter(&instance, &surface)?;
+    let (device, queue) = request_device(&adapter)?;
     let surface_caps = surface.get_capabilities(&adapter);
     let surface_format = surface_caps.formats[0]; // choose a supported format?
 
@@ -277,7 +284,7 @@ pub fn create_gpu_state(window: &Arc<Window>) -> GpuState {
 
     let num_indices = vertex::INDICES.len() as u32;
 
-    GpuState {
+    Ok(GpuState {
         surface,
         device,
         queue,
@@ -298,7 +305,7 @@ pub fn create_gpu_state(window: &Arc<Window>) -> GpuState {
         last_mouse_pos: (0.0, 0.0),
 
         depth_view,
-    }
+    })
 }
 
 fn create_pipeline(

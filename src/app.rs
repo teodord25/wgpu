@@ -98,7 +98,15 @@ impl ApplicationHandler for App {
                 .unwrap(),
         );
         self.window = Some(window.clone());
-        self.gpu = Some(gpu::create_gpu_state(&window));
+
+        self.gpu = Some(match gpu::create_gpu_state(&window) {
+            Ok(state) => state,
+            Err(err) => {
+                log::error!("Failed to create GPU state: {}", err);
+                return;
+            }
+        });
+
         window.request_redraw();
     }
 

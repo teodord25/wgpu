@@ -7,6 +7,8 @@ mod vertex;
 mod uniform;
 
 fn main() {
+    env_logger::init();
+
     let event_loop = EventLoop::new().unwrap();
 
     // ControlFlow::Poll continuously runs the event loop, even if the OS hasn't
