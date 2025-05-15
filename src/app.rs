@@ -7,7 +7,7 @@ use notify::event::ModifyKind;
 use notify::{Event, EventKind, RecommendedWatcher, Watcher};
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalSize, Size};
-use winit::event::StartCause;
+use winit::event::{MouseScrollDelta, StartCause};
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
@@ -126,6 +126,22 @@ impl ApplicationHandler for App {
                         gpu.camera.pitch = (gpu.camera.pitch - delta_y * sensitivity).clamp(-89.0_f32.to_radians(), 89.0_f32.to_radians());
                     }
                     gpu.last_mouse_pos = (x, y);
+                }
+
+                WindowEvent::MouseWheel { delta, .. } => {
+                    println!("MouseWheel event: {:?}", delta);
+                    let raw_scroll = match delta {
+                        MouseScrollDelta::LineDelta(_, y)    => y,
+                        MouseScrollDelta::PixelDelta(pos) => (pos.y as f32) / 120.0, // normalize pixels to “line” units
+                    };
+
+                    let zoom_speed = 0.1;
+                    let scale = 1.0 - raw_scroll * zoom_speed;
+
+                    gpu.camera.distance = (gpu.camera.distance * scale).max(0.1);
+                    println!("Updated zoom: {}", gpu.camera.distance);
+
+                    self.window.as_ref().unwrap().request_redraw();
                 }
 
                 _ => {}
