@@ -5,7 +5,7 @@ use crate::gpu::{
     load_shader
 };
 
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
 use std::time::Instant;
 use wgpu::util::DeviceExt;
@@ -126,6 +126,24 @@ pub fn create_gpu_state(window: &Arc<Window>) -> GpuState {
                     },
                     count: None,
                 },
+                // binding=3: the texture view
+                wgpu::BindGroupLayoutEntry {
+                    binding:    3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type:     wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension:  wgpu::TextureViewDimension::D2,
+                        multisampled:    false,
+                    },
+                    count: None,
+                },
+                // binding=4: the sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding:    4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
     });
 
@@ -161,6 +179,56 @@ pub fn create_gpu_state(window: &Arc<Window>) -> GpuState {
         usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
+    // 1. Load and flip Y so UV [0,0] is bottom-left
+    let img = image::open("assets/texture.png")
+        .expect("texture.png not found")
+        .flipv()
+        .into_rgba8();
+
+    let (width, height) = img.dimensions();
+    let size = wgpu::Extent3d {
+        width, height, depth_or_array_layers: 1,
+    };
+
+    // 2. Create the GPU texture
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Cube Texture"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+
+    // 3. Upload pixel data
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &img,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(NonZeroU32::new(4 * width).unwrap().into()),
+            rows_per_image: Some(NonZeroU32::new(height).unwrap().into()),
+        },
+        size,
+    );
+
+    // 4. Create a view & sampler
+    let texture_view = texture.create_view(&Default::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+
     // 2.4 Single bind group with 3 entries
     let ubo_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: &uniform_bind_group_layout,
@@ -176,6 +244,14 @@ pub fn create_gpu_state(window: &Arc<Window>) -> GpuState {
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: light_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(&sampler),
             },
         ],
         label: Some("UBO Bind Group"),
@@ -315,6 +391,24 @@ impl GpuState {
                             has_dynamic_offset: false,
                             min_binding_size:  Some( NonZeroU64::new(32).unwrap() ), // vec3 + pad
                         },
+                        count: None,
+                    },
+                    // binding=3: the texture view
+                    wgpu::BindGroupLayoutEntry {
+                        binding:    3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type:     wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension:  wgpu::TextureViewDimension::D2,
+                            multisampled:    false,
+                        },
+                        count: None,
+                    },
+                    // binding=4: the sampler
+                    wgpu::BindGroupLayoutEntry {
+                        binding:    4,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                 ],
